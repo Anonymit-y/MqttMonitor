@@ -1,0 +1,16 @@
+{
+  "profiles": [
+    {
+      "name": "milesight_ug67_default",
+      "device_id_path": ["devEUI"],
+      "temperature_path": ["data", "temperature"],
+      "humidity_path": ["data", "humidity"]
+    },
+    {
+      "name": "generic_flat_sensor",
+      "device_id_path": ["device_id"],
+      "temperature_path": ["temp"],
+      "humidity_path": ["hum"]
+    }
+  ]
+}

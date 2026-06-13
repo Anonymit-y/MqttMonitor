@@ -1,0 +1,94 @@
+
+# Common logging configuration to prevent edge devices from running out of disk space
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # 1. The Message Broker (Dumb Pipe)
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: farm_mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - farm_network
+    logging: *default-logging
+
+  # 2. The Time-Series Database
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: farm_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=farm_admin
+      - POSTGRES_PASSWORD=farm_password
+      - POSTGRES_DB=farm_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - farm_network
+    logging: *default-logging
+
+  # 3. The Logic Layer (Data Translation)
+  bridge:
+    build: ./services/bridge
+    container_name: farm_bridge
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+      - timescaledb
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_TOPIC=application/+/event/up
+      - DB_HOST=timescaledb
+      - DB_NAME=farm_data
+      - DB_USER=farm_admin
+      - DB_PASS=farm_password
+    volumes:
+      # Mount the profiles JSON so users can update sensors without rebuilding the container
+      - ./services/bridge/sensor_profiles.json:/app/sensor_profiles.json:ro
+    networks:
+      - farm_network
+    logging: *default-logging
+
+  # 4. The Visualization Layer
+  grafana:
+    image: grafana/grafana:latest
+    container_name: farm_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - timescaledb
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      # 1. Add this line to make Grafana's internal database permanent
+      - grafana_data:/var/lib/grafana
+      # 2. Keep the provisioning map
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # 3. CHANGE this path to /etc/grafana/dashboards so it doesn't overlap
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    networks:
+      - farm_network
+    logging: *default-logging
+
+networks:
+  farm_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  grafana_data:

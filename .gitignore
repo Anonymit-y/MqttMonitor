@@ -1,0 +1,15 @@
+# Ignore Database Files
+*.db
+*.db-wal
+*.db-shm
+
+# Ignore Mosquitto storage (if mounted locally)
+mosquitto/data/
+mosquitto/log/
+
+# Ignore Python caches from your bridge
+__pycache__/
+*.pyc
+
+# Ignore potential security/password files
+.env

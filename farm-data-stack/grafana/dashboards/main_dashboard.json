@@ -1,0 +1,55 @@
+{
+  "title": "Farm Sensor Overview",
+  "tags": ["farm", "edge", "production"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Live Temperature (°C)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "farm_db"
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "farm_db" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", device_id AS metric, temperature FROM sensor_logs WHERE $__timeFilter(time) ORDER BY 1;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "celsius"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Live Humidity (%)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "farm_db"
+      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "farm_db" },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", device_id AS metric, humidity FROM sensor_logs WHERE $__timeFilter(time) ORDER BY 1;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "percent"
+        }
+      }
+    }
+  ]
+}
