@@ -3,13 +3,15 @@ import json
 import psycopg2
 import paho.mqtt.client as mqtt
 
-# Configuration from Environment Variables
+# Configuration - Updated for your infrastructure
 DB_HOST = os.environ.get('DB_HOST', 'timescaledb')
 DB_NAME = os.environ.get('DB_NAME', 'farm_data')
 DB_USER = os.environ.get('DB_USER', 'farm_admin')
 DB_PASS = os.environ.get('DB_PASS', 'farm_password')
+
 MQTT_BROKER = os.environ.get('MQTT_HOST', 'mosquitto')
-MQTT_TOPIC = os.environ.get('MQTT_TOPIC', 'application/+/event/up')
+# UPDATED: Matches the farm/uplink/$deveui structure
+MQTT_TOPIC = os.environ.get('MQTT_TOPIC', 'farm/uplink/#') 
 PROFILES_PATH = "/app/sensor_profiles.json"
 
 def get_nested_value(data, path):
@@ -22,25 +24,24 @@ def get_nested_value(data, path):
             return None
     return current
 
-def parse_payload_with_profiles(payload_str):
-    """Matches the raw string payload against known sensor profiles."""
-    # Fix potential single quote formatting issues from raw payloads
-    clean_str = payload_str.replace("'", '"')
-    raw_json = json.loads(clean_str)
+def parse_payload(payload_str):
+    """Parses incoming JSON and matches it against your sensor profiles."""
+    try:
+        raw_json = json.loads(payload_str)
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON Decode Error: {e}", flush=True)
+        return None, None, None
 
-    # Reload profiles dynamically on each message so updates don't require restarts
-    if os.path.exists(PROFILES_PATH):
-        with open(PROFILES_PATH, 'r') as f:
-            config = json.load(f)
-            profiles = config.get("profiles", [])
-    else:
-        print(f"⚠️ Profile file not found at {PROFILES_PATH}! Using empty profiles.", flush=True)
-        profiles = []
+    # Load profiles
+    if not os.path.exists(PROFILES_PATH):
+        print(f"⚠️ Missing {PROFILES_PATH}", flush=True)
+        return None, None, None
 
-    # Iterate through profiles to find a match where data matches expected structural paths
+    with open(PROFILES_PATH, 'r') as f:
+        profiles = json.load(f).get("profiles", [])
+
     for profile in profiles:
         dev_id = get_nested_value(raw_json, profile.get("device_id_path", []))
-        
         if dev_id is not None:
             temp = get_nested_value(raw_json, profile.get("temperature_path", []))
             hum = get_nested_value(raw_json, profile.get("humidity_path", []))
@@ -48,66 +49,61 @@ def parse_payload_with_profiles(payload_str):
 
     return None, None, None
 
+def init_db():
+    """Initializes the TimescaleDB table and hypertable."""
+    conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sensor_logs (
+            time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            device_id TEXT,
+            temperature DOUBLE PRECISION,
+            humidity DOUBLE PRECISION
+        );
+    """)
+    # Convert to Hypertable for performance
+    cur.execute("SELECT create_hypertable('sensor_logs', 'time', if_not_exists => TRUE);")
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("✅ Database table initialized.", flush=True)
+
 def on_connect(client, userdata, flags, reason_code, properties=None):
     if reason_code == 0:
-        print(f"✅ Connected to MQTT Broker! Subscribing to: {MQTT_TOPIC}", flush=True)
+        print(f"✅ Connected to Broker! Subscribing to: {MQTT_TOPIC}", flush=True)
         client.subscribe(MQTT_TOPIC)
     else:
-        print(f"❌ Connection failed with reason code: {reason_code}", flush=True)
+        print(f"❌ Connection failed: {reason_code}", flush=True)
 
 def on_message(client, userdata, msg):
-    payload_str = msg.payload.decode('utf-8')
-    print(f"📩 Incoming on {msg.topic}: {payload_str}", flush=True)
+    print(f"📩 Raw Message on {msg.topic}: {msg.payload.decode()}", flush=True)
     
-    conn = None
+    device_id, temp, hum = parse_payload(msg.payload.decode())
+
+    if device_id is None:
+        print("⚠️ No matching profile found for this payload.", flush=True)
+        return
+
     try:
-        device_id, temp, hum = parse_payload_with_profiles(payload_str)
-
-        if device_id is None:
-            print("⚠️ Payload did not match any known profile signatures. Skipping.", flush=True)
-            return
-
-        if temp is None or hum is None:
-            print(f"⚠️ Matched device {device_id}, but metrics were missing. Skipping DB insert.", flush=True)
-            return
-
-        # Open short-lived connection to TimescaleDB
         conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS)
         cur = conn.cursor()
-
-        # Ensure the hypertable/standard table exists before inserting
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS sensor_logs (
-                time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                device_id TEXT,
-                temperature DOUBLE PRECISION,
-                humidity DOUBLE PRECISION
-            );
-        """)
-
-        query = "INSERT INTO sensor_logs (device_id, temperature, humidity) VALUES (%s, %s, %s)"
-        cur.execute(query, (device_id, temp, hum))
-        
+        cur.execute(
+            "INSERT INTO sensor_logs (device_id, temperature, humidity) VALUES (%s, %s, %s)",
+            (device_id, temp, hum)
+        )
         conn.commit()
         cur.close()
-        print(f"🚀 Successfully Logged -> Device: {device_id} | Temp: {temp}°C | Hum: {hum}%", flush=True)
-
+        conn.close()
+        print(f"🚀 Logged -> Device: {device_id} | T: {temp}°C | H: {hum}%", flush=True)
     except Exception as e:
-        print(f"❌ Error processing message: {e}", flush=True)
-    finally:
-        if conn:
-            conn.close()
+        print(f"❌ Database Write Error: {e}", flush=True)
 
-# Initialize MQTT Client using standard Callback API v2
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-client.on_connect = on_connect
-client.on_message = on_message
-
-try:
-    print(f"🔄 Starting Bridge. Connecting to {MQTT_BROKER}...", flush=True)
+if __name__ == "__main__":
+    init_db()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.on_connect = on_connect
+    client.on_message = on_message
+    
+    print(f"🔄 Starting Bridge. Target: {MQTT_BROKER}...", flush=True)
     client.connect(MQTT_BROKER, 1883, 60)
     client.loop_forever()
-except KeyboardInterrupt:
-    print("🛑 Bridge stopped manually.", flush=True)
-except Exception as e:
-    print(f"💥 Fatal Exception: {e}", flush=True)
