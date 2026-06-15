@@ -49,7 +49,7 @@ services:
       - timescaledb
     environment:
       - MQTT_HOST=mosquitto
-      - MQTT_TOPIC=application/+/event/up
+      - MQTT_TOPIC=farm/uplink/#
       - DB_HOST=timescaledb
       - DB_NAME=farm_data
       - DB_USER=farm_admin
