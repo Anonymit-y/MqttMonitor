@@ -1,6 +1,12 @@
 {
   "profiles": [
     {
+      "name": "milesight_decoded_v1",
+      "device_id_path": ["devEUI"],
+      "temperature_path": ["object", "temperature"],
+      "humidity_path": ["object", "humidity"]
+    },
+    {
       "name": "milesight_ug67_default",
       "device_id_path": ["devEUI"],
       "temperature_path": ["data", "temperature"],
