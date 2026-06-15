@@ -3,14 +3,13 @@ import json
 import psycopg2
 import paho.mqtt.client as mqtt
 
-# Configuration - Updated for your infrastructure
+# Configuration
 DB_HOST = os.environ.get('DB_HOST', 'timescaledb')
 DB_NAME = os.environ.get('DB_NAME', 'farm_data')
 DB_USER = os.environ.get('DB_USER', 'farm_admin')
 DB_PASS = os.environ.get('DB_PASS', 'farm_password')
 
 MQTT_BROKER = os.environ.get('MQTT_HOST', 'mosquitto')
-# UPDATED: Matches the farm/uplink/$deveui structure
 MQTT_TOPIC = os.environ.get('MQTT_TOPIC', 'farm/uplink/#') 
 PROFILES_PATH = "/app/sensor_profiles.json"
 
@@ -25,29 +24,29 @@ def get_nested_value(data, path):
     return current
 
 def parse_payload(payload_str):
-    """Parses incoming JSON and matches it against your sensor profiles."""
+    """Parses incoming JSON and returns only the metrics based on profiles."""
     try:
         raw_json = json.loads(payload_str)
     except json.JSONDecodeError as e:
         print(f"❌ JSON Decode Error: {e}", flush=True)
-        return None, None, None
+        return None, None
 
-    # Load profiles
     if not os.path.exists(PROFILES_PATH):
         print(f"⚠️ Missing {PROFILES_PATH}", flush=True)
-        return None, None, None
+        return None, None
 
     with open(PROFILES_PATH, 'r') as f:
         profiles = json.load(f).get("profiles", [])
 
     for profile in profiles:
-        dev_id = get_nested_value(raw_json, profile.get("device_id_path", []))
-        if dev_id is not None:
-            temp = get_nested_value(raw_json, profile.get("temperature_path", []))
-            hum = get_nested_value(raw_json, profile.get("humidity_path", []))
-            return str(dev_id), temp, hum
+        temp = get_nested_value(raw_json, profile.get("temperature_path", []))
+        hum = get_nested_value(raw_json, profile.get("humidity_path", []))
+        
+        # If we found the metrics, return them immediately
+        if temp is not None and hum is not None:
+            return temp, hum
 
-    return None, None, None
+    return None, None
 
 def init_db():
     """Initializes the TimescaleDB table and hypertable."""
@@ -78,10 +77,14 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 def on_message(client, userdata, msg):
     print(f"📩 Raw Message on {msg.topic}: {msg.payload.decode()}", flush=True)
     
-    device_id, temp, hum = parse_payload(msg.payload.decode())
+    # EXTRACT ID FROM TOPIC: splits 'farm/uplink/24e124725d330720' and grabs the last part
+    topic_parts = msg.topic.split('/')
+    device_id = topic_parts[-1] 
 
-    if device_id is None:
-        print("⚠️ No matching profile found for this payload.", flush=True)
+    temp, hum = parse_payload(msg.payload.decode())
+
+    if temp is None or hum is None:
+        print("⚠️ No matching profile found for this payload's metrics.", flush=True)
         return
 
     try:
